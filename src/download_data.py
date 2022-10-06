@@ -1,4 +1,5 @@
 from os.path import join
+from os import makedirs
 import numpy as np
 import pandas as pd
 import mne
@@ -172,6 +173,8 @@ fname = (
 )
 
 print("\nSaving raw data...", end="")
+makedirs(result_dir,exist_ok=True)
+
 file = np.memmap(
     join(result_dir, "raw-" + fname + ".dat"), mode="w+", dtype=np.float32, shape=shape
 )
