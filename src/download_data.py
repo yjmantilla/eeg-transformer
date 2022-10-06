@@ -168,7 +168,7 @@ fname = (
     f"nsamp_{shape[0]}-"
     f"eplen_{shape[1]}"
     f"{'-norm' if normalize_epochs else ''}-"
-    f"example_{'-'.join(target_list)}"
+    f"example_{'-'.join(targets_list)}"
 )
 
 print("\nSaving raw data...", end="")
