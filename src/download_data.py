@@ -10,7 +10,7 @@ from mne.datasets import eegbci
 result_dir = "data/"
 # which tasks should be extracted from the dataset, can be "all" or a list of multiple:
 # baseline-eyes, fist-motion, fist-imagination, fist_feet-motion, fist_feet-imagination
-target_type = "all"
+target_type = "baseline-eyes"
 # if true, compute z-scores for each epoch individually
 normalize_epochs = False
 # length of one epoch in seconds
@@ -158,12 +158,17 @@ epochs, subject_labels, labels = extract_epochs(
     target_type, epoch_duration=epoch_duration
 )
 
+if not isinstance(target_type, list):
+    targets_list = [target_type]
+else:
+    targets_list = target_type
+
 shape = len(epochs), epochs[0].shape[1], epochs[0].shape[0]
 fname = (
     f"nsamp_{shape[0]}-"
     f"eplen_{shape[1]}"
     f"{'-norm' if normalize_epochs else ''}-"
-    f"example_{'-'.join(target_type)}"
+    f"example_{'-'.join(target_list)}"
 )
 
 print("\nSaving raw data...", end="")
