@@ -1,5 +1,4 @@
 import os
-from pickle import TRUE
 import mne
 import numpy as np
 from typing import Sequence, List, Tuple, Union, Optional, Dict, Any
@@ -20,10 +19,12 @@ from mne.io.constants import FIFF
 from mne.io.pick import _picks_to_idx
 from mne.utils import _validate_type, fill_doc, verbose
 import ntpath
-
+import glob
+from mne_connectivity.viz import plot_connectivity_circle
+from PIL import ImageGrab
 
 def plot_sensors_connectivity(info, con, picks=None,
-                              cbar_label='Connectivity',NMAX=100):
+                              cbar_label='Connectivity',NMAX=100,show=True,scale=(None,None)):
     """Visualize the sensor connectivity in 3D.
 
     Parameters
@@ -62,12 +63,14 @@ def plot_sensors_connectivity(info, con, picks=None,
     sens_loc = [info['chs'][k]['loc'][:3] for k in picks]
     sens_loc = np.array(sens_loc)
 
+    minx,miny,minz=(np.min(sens_loc[:,i]) for i in range(3))
+    maxx,maxy,maxz=(np.max(sens_loc[:,i]) for i in range(3))
     renderer.sphere(np.c_[sens_loc[:, 0], sens_loc[:, 1], sens_loc[:, 2]],
                     color=(1, 1, 1), opacity=1, scale=0.005)
 
     # Get the strongest connections
     n_con = NMAX  # show up to 20 connections
-    min_dist = 0.05  # exclude sensors that are less than 5cm apart
+    min_dist = 0  # exclude sensors that are less than 5cm apart
     threshold = np.sort(con, axis=None)[-n_con]
     ii, jj = np.where(con >= threshold)
 
@@ -82,8 +85,11 @@ def plot_sensors_connectivity(info, con, picks=None,
     con_val = np.array(con_val)
 
     # Show the connections as tubes between sensors
-    vmax = np.max(con_val)
-    vmin = np.min(con_val)
+    vmin,vmax = scale
+    if vmax is None:
+        vmax = np.max(con_val)
+    if vmin is None:
+        vmin = np.min(con_val)
     for val, nodes in zip(con_val, con_nodes):
         x1, y1, z1 = sens_loc[nodes[0]]
         x2, y2, z2 = sens_loc[nodes[1]]
@@ -92,6 +98,19 @@ def plot_sensors_connectivity(info, con, picks=None,
                              scalars=np.c_[val, val],
                              vmin=vmin, vmax=vmax,
                              reverse_lut=True)
+
+
+    tube = renderer.tube(origin=np.c_[minx, miny, maxz],
+                            destination=np.c_[minx, maxy, maxz],
+                            scalars=np.c_[vmin, vmax],
+                            vmin=vmin, vmax=vmax,
+                            reverse_lut=True)
+
+    tube = renderer.tube(origin=np.c_[minx, miny, maxz],
+                            destination=np.c_[maxx, miny, maxz],
+                            scalars=np.c_[(vmin+vmax)/2, (vmin+vmax)/2],
+                            vmin=vmin, vmax=vmax,
+                            reverse_lut=True)
 
     renderer.scalarbar(source=tube, title=cbar_label)
 
@@ -105,11 +124,13 @@ def plot_sensors_connectivity(info, con, picks=None,
                         scale=0.005,
                         color=(0, 0, 0))
 
-    renderer.set_camera(azimuth=-88.7, elevation=40.8,
+    renderer.set_camera(azimuth=-88.7, elevation=70,
                         distance=0.76,
                         focalpoint=np.array([-3.9e-4, -8.5e-3, -1e-2]))
-    renderer.show()
-    return renderer.scene()
+    renderer.reset_camera()
+    if show:
+        renderer.show()
+    return renderer
 
 
 def standardize(name):
@@ -164,51 +185,143 @@ def eegbci_connectivity(
     montage_type = "standard_1005"
     # define channel names
 
-    for method in methods:
-        for sub in sub_list:
-            for task in task_list:
-                outfile = ntpath.basename(filenames[sub][task].replace('.edf',f'_{task_map[task]}_{method}.npy'))
+    for sub in sub_list:
+        for task in task_list:
+                results={}
+                #filename = ntpath.basename(filenames[sub][task]).split('.')[0].split('R')
+                outfile = os.path.join(outpath,f'sub-{"{:03d}".format(sub)}_task-{task_map[task]}_epoch-{epoch_duration}s_conn.npy')
                 if os.path.isfile(outfile):
                     print(f'{outfile} already existed... skipping...')
-                else:
-                    raw = mne.io.read_raw_edf(
-                        filenames[sub][task], preload=True, verbose=False
-                    )
-                    raw = raw.copy().filter(l_freq=band[0] , h_freq=band[1])
-                    raw = raw.rename_channels(standardize)
-                    raw = raw.drop_channels(["T9","T10","Iz"])
-                    raw = raw.set_montage("standard_1005")
-                    # Segment into epochs
-                    epochs = mne.make_fixed_length_epochs(
-                        raw, duration=epoch_duration, preload=True, verbose=False
-                    )
-                    del raw
-                    chan_names.append(deepcopy(epochs.info["ch_names"]))
-                    #epochs.plot_sensors(kind='3d',block=True)
-                    conn = spectral_connectivity_epochs(
-                        epochs.get_data(),mode='multitaper', indices=None,
-                        sfreq=epochs.info['sfreq'], fmin=bands_fmin,fmax=bands_fmax,n_jobs = 4,method=method,faverage=True,names=epochs.info['ch_names'])
-                    # x_idx,y_idx = topk(conn.get_data('dense')[:,:,b],100)
-                    # conn_mask=conn.get_data('dense')[:,:,b]
-                    # conn_mask[x_idx,y_idx]=np.inf
-                    # other_idx = np.where(conn_mask!=np.inf)
-                    # conn_mask= conn.get_data('dense')[:,:,b]
-                    # conn_mask[other_idx]=0
+                    # # Forgot to add band order initially
+                    # exemplar_conn = np.load(outfile,allow_pickle=True).item()
+                    # raw = mne.io.read_raw_edf(
+                    #         filenames[sub][task], preload=True, verbose=False
+                    #     )
+                    # raw = raw.copy().filter(l_freq=band[0] , h_freq=band[1])
+                    # raw = raw.rename_channels(standardize)
+                    # raw = raw.drop_channels(["T9","T10","Iz"])
+                    # raw = raw.set_montage("standard_1005")
+                    # # Segment into epochs
+                    # epochs = mne.make_fixed_length_epochs(
+                    #     raw, duration=epoch_duration, preload=True, verbose=False
+                    # )
+                    # for method in exemplar_conn.keys():
+                    #     exemplar_conn[method]['band_order']=bands_label
+                    #     exemplar_conn[method]['info']=epochs.info # i know this is a waste of space
+                    # np.save(outfile,exemplar_conn)
 
-                    #freqs = coh.freqs
-                    #cohs.append(coh.get_data())
-                    # combined_view(epochs.info, conn)
-                    results = {}
-                    results['values']=conn.get_data('dense')
-                    results['dims']=('node_in','node_out',conn.dims[-1])
-                    results['attrs']=conn.attrs
-                    results['bands']=bands
-                    results['method']=method
-                    results['freqs']=conn.freqs
+                else:
+                    for method in methods:
+                        results[method]={}
+                        raw = mne.io.read_raw_edf(
+                            filenames[sub][task], preload=True, verbose=False
+                        )
+                        raw = raw.copy().filter(l_freq=band[0] , h_freq=band[1])
+                        raw = raw.rename_channels(standardize)
+                        raw = raw.drop_channels(["T9","T10","Iz"])
+                        raw = raw.set_montage("standard_1005")
+                        # Segment into epochs
+                        epochs = mne.make_fixed_length_epochs(
+                            raw, duration=epoch_duration, preload=True, verbose=False
+                        )
+                        del raw
+                        chan_names.append(deepcopy(epochs.info["ch_names"]))
+                        #epochs.plot_sensors(kind='3d',block=True)
+                        conn = spectral_connectivity_epochs(
+                            epochs.get_data(),mode='multitaper', indices=None,
+                            sfreq=epochs.info['sfreq'], fmin=bands_fmin,fmax=bands_fmax,n_jobs = 4,method=method,faverage=True,names=epochs.info['ch_names'])
+                        # x_idx,y_idx = topk(conn.get_data('dense')[:,:,b],100)
+                        # conn_mask=conn.get_data('dense')[:,:,b]
+                        # conn_mask[x_idx,y_idx]=np.inf
+                        # other_idx = np.where(conn_mask!=np.inf)
+                        # conn_mask= conn.get_data('dense')[:,:,b]
+                        # conn_mask[other_idx]=0
+
+                        #freqs = coh.freqs
+                        #cohs.append(coh.get_data())
+                        # combined_view(epochs.info, conn)
+
+                        results[method]['values']=conn.get_data('dense')
+                        results[method]['dims']=('node_in','node_out',conn.dims[-1])
+                        results[method]['attrs']=conn.attrs
+                        results[method]['bands']=bands
+                        results[method]['band_order']=bands_label
+                        results[method]['method']=method
+                        results[method]['freqs']=conn.freqs
+                        results[method]['info']=epochs.info
                     np.save(outfile,results)
-                    #plot_sensors_connectivity(epochs.info,conn.get_data('dense')[:,:,b],cbar_label=method+'-'+task,NMAX=100)
-                    
-                    #print('ok')
+                        #plot_sensors_connectivity(epochs.info,conn.get_data('dense')[:,:,b],cbar_label=method+'-'+task,NMAX=100)
+                        
+                        #print('ok')
+def connect_aggregate(connectivity_path="data/connectivity",outpath='data/connectivity_agg',epoch_duration=2,task='close',NMAX=100):
+    os.makedirs(outpath,exist_ok=True)
+    files=glob.glob(os.path.join(connectivity_path,f'sub-*_task-{task}_epoch-{epoch_duration}s_conn.npy'))
+    
+    if not isinstance(NMAX,list):
+        NMAX = [NMAX]
+    # get iterables from first file (metrics and bands)
+    exemplar_conn = np.load(files[0],allow_pickle=True).item()
+    metrics = list(exemplar_conn.keys())
+    bands = exemplar_conn[metrics[0]]['band_order']
+    ch_names = exemplar_conn[metrics[0]]['attrs']['node_names']
+    info = exemplar_conn[metrics[0]]['info']
+    for band_idx,band in enumerate(bands):
+        for metric in exemplar_conn.keys():
+            filename = f'task-{task}_epoch-{epoch_duration}s_band-{band}_metric-{metric}'
+            filepath = os.path.join(outpath,filename+'_aggconn')
+            fileagg = filepath+'.npy'
+            filegltf = filepath+'.gltf'
+            filepng = filepath+'.png'
+            if  all([os.path.isfile(x) for x in [fileagg]+[filegltf.replace('_aggconn',f'_nmax-{NM}_aggconn') for NM in NMAX]+[filepng.replace('_aggconn',f'_nmax-{NM}_aggconn') for NM in NMAX]]):
+                print('Following files already existed:')
+                [print(x) for x in [fileagg,filegltf,filepng]]
+                print('...skipping')
+            else:
+                collected_conns=[]
+                result={}
+                for i in range(len(files)):
+                    i=0
+                    conn_file = files[i]
+                    conn = np.load(conn_file,allow_pickle=True).item()
+                    freqs = conn[metric]['bands'][band]
+                    assert conn[metric]['attrs']['node_names'] == ch_names
+                    collected_conns.append(conn[metric]['values'][:,:,band_idx])
+                result['collected_conns'] = np.dstack(collected_conns)
+                result['mean_conn'] = np.mean(result['collected_conns'],axis=-1)
+                result['node_names'] = ch_names
+                vmin,vmax = np.min(np.abs(result['mean_conn'])),np.max(np.abs(result['mean_conn']))
+
+                np.save(fileagg,result)
+                # abs to ignore directionality and maintain constant scale between 0 and 1
+                for NM in NMAX:
+                    renderer = plot_sensors_connectivity(info,np.abs(result['mean_conn']),cbar_label=filename,NMAX=NM,show=False,scale=(vmin,vmax))
+                    renderer.set_camera(azimuth=-90, elevation=0,
+                                    distance=0.7,
+                                    focalpoint=np.array([-3.9e-4, -8.5e-3, -1e-2]))
+                    # renderer.figure.plotter.screenshot(filename='airplane.png')
+                    # plt.imshow(renderer.plotter.image)
+                    # plt.show()
+                    # renderer.figure.plotter.export_html(filename='airplane.html')
+                    renderer.figure.plotter.export_gltf(filename=filegltf.replace('_aggconn',f'_nmax-{NM}_aggconn'))
+                    save_path = filepng.replace('_aggconn',f'_nmax-{NM}_aggconn').replace('.png','.jpg')
+
+                    # renderer.plotter.showMaximized()
+                    # renderer.show()
+                    # renderer.screenshot(save_path)
+                    # snapshot = ImageGrab.grab()
+                    # snapshot.save(save_path)
+                    # renderer.close()
+                    fig,ax=plot_connectivity_circle(np.abs(result['mean_conn']),result['node_names'],show=False,vmin=vmin,vmax=vmax,n_lines=NM)
+                    fig.savefig(filepng.replace('_aggconn',f'_nmax-{NM}_aggconn'))
+                # renderer.figure.plotter.export_vtkjs(filename='airplane')
+
+    print('ok')
+
 
 if __name__=='__main__':
-    eegbci_connectivity(None,2)
+    for epoch_duration in [2,3,5]:
+        eegbci_connectivity(None,epoch_duration)
+    NMAX =[10,30,100]
+    for epoch_duration in [2,3,5]:
+        for task in ['close','open']:
+            connect_aggregate(epoch_duration=epoch_duration,task=task,NMAX=NMAX)
